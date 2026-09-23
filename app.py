@@ -13,6 +13,11 @@ from langchain_core.prompts import ChatPromptTemplate
 
 load_dotenv()
 
+if "GOOGLE_API_KEY" in st.secrets:
+    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+
+st.set_page_config(page_title="RAG Book Assistant")
+
 st.set_page_config(page_title="Smart Document Assistant")
 
 st.title("📚 Smart Document Assistant")
@@ -90,7 +95,7 @@ if "docs" in st.session_state:
             document_text = document_text[:30000]
 
             summary_llm = ChatGoogleGenerativeAI(
-                model="gemini-3.8-flash",
+                model="gemini-3.6-flash",
                 temperature=0
             )
 
@@ -151,8 +156,8 @@ if os.path.exists("chroma_db"):
     )
 
     llm = ChatGoogleGenerativeAI(
-    model="gemini-3.8-flash",
-    temperature=0
+    model="gemini-3.6-flash",
+    google_api_key=os.environ["GOOGLE_API_KEY"]
 )
 
     prompt = ChatPromptTemplate.from_messages(
