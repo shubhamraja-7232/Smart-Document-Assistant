@@ -13,15 +13,18 @@ from langchain_core.prompts import ChatPromptTemplate
 
 load_dotenv()
 
-if "GOOGLE_API_KEY" in st.secrets:
-    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-
-st.set_page_config(page_title="RAG Book Assistant")
+# Get API key from local .env or Streamlit Cloud Secrets
+if not os.getenv("GOOGLE_API_KEY"):
+    try:
+        os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+    except Exception:
+        pass
 
 st.set_page_config(page_title="Smart Document Assistant")
 
 st.title("📚 Smart Document Assistant")
 st.write("Upload a PDF or TXT document and ask questions from it")
+
 
 uploaded_file = st.file_uploader(
     "Upload a document",
@@ -37,6 +40,7 @@ if uploaded_file:
         delete=False,
         suffix=file_extension
     ) as tmp_file:
+
         tmp_file.write(uploaded_file.read())
         file_path = tmp_file.name
 
@@ -47,10 +51,13 @@ if uploaded_file:
         with st.spinner("Processing document..."):
 
             if uploaded_file.name.lower().endswith(".pdf"):
-                 loader = PyPDFLoader(file_path)
+                loader = PyPDFLoader(file_path)
 
             elif uploaded_file.name.lower().endswith(".txt"):
-                 loader = TextLoader(file_path, encoding="utf-8")
+                loader = TextLoader(
+                    file_path,
+                    encoding="utf-8"
+                )
 
             docs = loader.load()
 
@@ -63,7 +70,7 @@ if uploaded_file:
 
             embeddings = HuggingFaceEmbeddings(
                 model_name="sentence-transformers/all-MiniLM-L6-v2"
-          )
+            )
 
             vectorstore = Chroma.from_documents(
                 documents=chunks,
@@ -71,10 +78,10 @@ if uploaded_file:
                 persist_directory="chroma_db"
             )
 
-            
+        st.session_state["docs"] = docs
+
         st.success("Vector database created!")
 
-        st.session_state["docs"] = docs
 
 if "docs" in st.session_state:
 
@@ -96,7 +103,7 @@ if "docs" in st.session_state:
 
             summary_llm = ChatGoogleGenerativeAI(
                 model="gemini-3.6-flash",
-                temperature=0
+                google_api_key=os.environ["GOOGLE_API_KEY"]
             )
 
             summary_prompt = f"""
@@ -106,6 +113,7 @@ Summarize the following document using ONLY the
 information provided in the document.
 
 Include:
+
 1. Main topic of the document
 2. Important concepts
 3. Important sections or ideas
@@ -118,28 +126,40 @@ Document:
 {document_text}
 """
 
-            summary_response = summary_llm.invoke(summary_prompt)
+            try:
 
-            if isinstance(summary_response.content, list):
-
-                summary = "".join(
-                    block.get("text", "")
-                    for block in summary_response.content
-                    if isinstance(block, dict)
+                summary_response = summary_llm.invoke(
+                    summary_prompt
                 )
 
-            else:
-                summary = summary_response.content
+                if isinstance(summary_response.content, list):
 
-            st.write(summary)
+                    summary = "".join(
+                        block.get("text", "")
+                        for block in summary_response.content
+                        if isinstance(block, dict)
+                    )
 
+                else:
+
+                    summary = summary_response.content
+
+                st.write(summary)
+
+            except Exception as e:
+
+                st.error(
+                    "Gemini API temporarily failed while generating the summary."
+                )
+
+                st.write(f"Error: {e}")
 
 
 if os.path.exists("chroma_db"):
 
     embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
 
     vectorstore = Chroma(
         persist_directory="chroma_db",
@@ -149,16 +169,16 @@ if os.path.exists("chroma_db"):
     retriever = vectorstore.as_retriever(
         search_type="mmr",
         search_kwargs={
-            "k":4,
-            "fetch_k":10,
-            "lambda_mult":0.5
+            "k": 3,
+            "fetch_k": 8,
+            "lambda_mult": 0.5
         }
     )
 
     llm = ChatGoogleGenerativeAI(
-    model="gemini-3.6-flash",
-    google_api_key=os.environ["GOOGLE_API_KEY"]
-)
+        model="gemini-3.6-flash",
+        google_api_key=os.environ["GOOGLE_API_KEY"]
+    )
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -185,9 +205,12 @@ Question:
     )
 
     st.divider()
-    st.subheader("Ask Questions From the Book")
 
-    query = st.text_input("Enter your question")
+    st.subheader("Ask Questions From the Document")
+
+    query = st.text_input(
+        "Enter your question"
+    )
 
     if query:
 
@@ -197,38 +220,66 @@ Question:
             [doc.page_content for doc in docs]
         )
 
-        final_prompt = prompt.invoke({
-            "context": context,
-            "question": query
-        })
+        context = context[:8000]
 
-        response = llm.invoke(final_prompt)
+        final_prompt = prompt.invoke(
+            {
+                "context": context,
+                "question": query
+            }
+        )
 
+        try:
 
-        if isinstance(response.content, list):
-            answer = "".join(
-                block.get("text", "")
-                for block in response.content
-                if isinstance(block, dict)
+            response = llm.invoke(
+                final_prompt
             )
-        else:
-            answer = response.content
 
-        st.write("🤖 AI Answer")
-        st.write(answer)
+            if isinstance(response.content, list):
 
-        st.write("### 📚 Sources")
+                answer = "".join(
+                    block.get("text", "")
+                    for block in response.content
+                    if isinstance(block, dict)
+                )
 
-        seen_pages = set()
-
-        for doc in docs:
-            page = doc.metadata.get("page")
-
-            if page is not None:
-                page_number = page + 1
-
-                if page_number not in seen_pages:
-                    st.write(f"- Page {page_number}")
-                    seen_pages.add(page_number)
             else:
-                st.write("- Page information unavailable")
+
+                answer = response.content
+
+            st.write("### 🤖 AI Answer")
+
+            st.write(answer)
+
+            st.write("### 📚 Sources")
+
+            seen_pages = set()
+
+            for doc in docs:
+
+                page = doc.metadata.get("page")
+
+                if page is not None:
+
+                    page_number = page + 1
+
+                    if page_number not in seen_pages:
+
+                        st.write(
+                            f"- Page {page_number}"
+                        )
+
+                        seen_pages.add(page_number)
+
+                else:
+
+                    st.write(
+                        "- Page information unavailable"
+                    )
+
+        except Exception as e:
+
+            st.error("Gemini API temporarily failed. Please try again.")
+
+            st.write(f"Error: {e}")
+            st.stop()
